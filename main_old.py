@@ -1,13 +1,16 @@
-# main.py - 修正版暴力記帳系統
+# main_old.py - 暴力記帳系統主程式
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import sqlite3
 import uuid
 import os
 import re
+import base64
+import requests
 from datetime import datetime
 from typing import Dict, List
-import tempfile
+import json
 
 # 建立必要的資料夾
 os.makedirs("uploads", exist_ok=True)
@@ -16,94 +19,10 @@ os.makedirs("static", exist_ok=True)
 app = FastAPI(title="暴力記帳系統", description="拍照→辨識→記帳，就這麼簡單！")
 
 
-# 資料庫初始化函式
-def init_database():
-    """初始化資料庫和表格"""
-    try:
-        conn = sqlite3.connect('receipts.db')
-        cursor = conn.cursor()
-
-        # 建立公司表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS company (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                tax_id TEXT,
-                address TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        # 建立分類表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS categories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                keywords TEXT,
-                tax_deductible BOOLEAN DEFAULT 1,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        # 建立發票記錄表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS receipts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                photo_path TEXT,
-                invoice_number TEXT,
-                date TEXT,
-                merchant TEXT,
-                amount REAL DEFAULT 0,
-                tax_amount REAL DEFAULT 0,
-                category TEXT DEFAULT '雜費',
-                description TEXT,
-                is_business BOOLEAN DEFAULT 1,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        # 插入預設分類（如果不存在）
-        cursor.execute('SELECT COUNT(*) FROM categories')
-        if cursor.fetchone()[0] == 0:
-            categories = [
-                ('餐費', '餐廳,小吃,咖啡,便當,火鍋,燒烤,飲料', True),
-                ('交通', '加油,停車,高鐵,計程車,捷運,公車,機票', True),
-                ('辦公用品', '文具,紙張,印表機,電腦,筆,資料夾', True),
-                ('軟體服務', '訂閱,SaaS,Office,Adobe,Google,AWS', True),
-                ('設備', '電腦,螢幕,鍵盤,滑鼠,椅子,桌子', True),
-                ('雜費', '水電,電話,網路,清潔,維修', True)
-            ]
-
-            for name, keywords, tax_deductible in categories:
-                cursor.execute('''
-                    INSERT INTO categories (name, keywords, tax_deductible)
-                    VALUES (?, ?, ?)
-                ''', (name, keywords, tax_deductible))
-
-        # 插入公司資料（如果不存在）
-        cursor.execute('SELECT COUNT(*) FROM company')
-        if cursor.fetchone()[0] == 0:
-            cursor.execute('''
-                INSERT INTO company (name, tax_id, address)
-                VALUES (?, ?, ?)
-            ''', ('我的公司', '12345678', '台北市'))
-
-        conn.commit()
-        conn.close()
-        print("✅ 資料庫初始化完成")
-        return True
-
-    except Exception as e:
-        print(f"❌ 資料庫初始化失敗: {e}")
-        return False
-
-
-# 啟動時初始化資料庫
-init_database()
-
-
+# 暴力AI辨識類別
 class BrutalReceiptAI:
     def __init__(self):
+        # 分類關鍵字（從資料庫載入）
         self.categories = self.load_categories()
 
     def load_categories(self) -> Dict[str, List[str]]:
@@ -122,9 +41,8 @@ class BrutalReceiptAI:
 
             conn.close()
             return categories
-        except Exception as e:
-            print(f"載入分類失敗: {e}")
-            # 回傳預設分類
+        except:
+            # 如果資料庫有問題，使用預設分類
             return {
                 '餐費': ['餐廳', '小吃', '咖啡', '便當', '火鍋', '燒烤', '飲料'],
                 '交通': ['加油', '停車', '高鐵', '計程車', '捷運', '公車', '機票'],
@@ -139,7 +57,7 @@ class BrutalReceiptAI:
 
         print(f"🔍 開始處理發票: {image_path}")
 
-        # 1. 模擬OCR辨識
+        # 1. 模擬OCR辨識（實際應該調用Google Vision API）
         text = self._simulate_ocr(image_path)
         print(f"📝 OCR結果: {text[:100]}...")
 
@@ -154,7 +72,8 @@ class BrutalReceiptAI:
         return data
 
     def _simulate_ocr(self, image_path: str) -> str:
-        """模擬OCR結果"""
+        """模擬OCR結果（實際使用時要接Google Vision API）"""
+        # 這裡模擬一個台灣發票的OCR結果
         fake_receipts = [
             """
             統一發票
@@ -165,6 +84,7 @@ class BrutalReceiptAI:
             品項: 美式咖啡大杯
             數量: 1
             單價: 120
+            小計: 120
             營業稅: 6
             總計: 126
             """,
@@ -183,25 +103,14 @@ class BrutalReceiptAI:
             發票
             EF11223344
             2024年12月16日
-            麥當勞
-            統編: 12345678
-            大麥克套餐: 149
-            可樂: 25
-            總計: 174
-            """,
-            """
-            統一發票
-            GH55667788
-            113年12月16日
-            誠品書店
-            統編: 87654321
-            商品: Python程式設計
-            單價: 450
-            營業稅: 21
-            總計: 471
+            台北車站停車場
+            停車費: 50
+            時數: 3小時
+            總金額: 50
             """
         ]
 
+        # 隨機選一個模擬結果
         import random
         return random.choice(fake_receipts)
 
@@ -217,12 +126,12 @@ class BrutalReceiptAI:
             'items': []
         }
 
-        # 發票號碼
+        # 發票號碼：兩個英文字母+8個數字
         invoice_match = re.search(r'[A-Z]{2}\d{8}', text)
         if invoice_match:
             result['invoice_number'] = invoice_match.group()
 
-        # 總金額
+        # 總金額：各種可能的表示方式
         amount_patterns = [
             r'總計[：:\s]*\$?(\d{1,6})',
             r'合計[：:\s]*\$?(\d{1,6})',
@@ -238,6 +147,7 @@ class BrutalReceiptAI:
                 result['amount'] = int(match.group(1))
                 break
 
+        # 如果沒找到總計，找單價
         if result['amount'] == 0:
             price_match = re.search(r'(\d{1,4})', text)
             if price_match:
@@ -245,49 +155,53 @@ class BrutalReceiptAI:
 
         # 日期解析
         date_patterns = [
-            r'(\d{2,3})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',
-            r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',
-            r'(\d{4})/(\d{1,2})/(\d{1,2})',
+            r'(\d{2,3})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',  # 民國年
+            r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',  # 西元年
+            r'(\d{4})/(\d{1,2})/(\d{1,2})',  # 2024/12/16
         ]
 
         for pattern in date_patterns:
             date_match = re.search(pattern, text)
             if date_match:
                 year = int(date_match.group(1))
-                if year < 1000:
+                if year < 1000:  # 民國年轉西元年
                     year += 1911
                 month = int(date_match.group(2))
                 day = int(date_match.group(3))
                 result['date'] = f"{year}-{month:02d}-{day:02d}"
                 break
 
+        # 如果沒有日期，使用今天
         if not result['date']:
             result['date'] = datetime.now().strftime('%Y-%m-%d')
 
-        # 商家名稱
+        # 商家名稱：找最長的中文字串
         chinese_texts = re.findall(r'[\u4e00-\u9fff]+', text)
         if chinese_texts:
-            filtered = [t for t in chinese_texts
-                        if t not in ['統一發票', '電子發票', '營業稅', '總計', '合計']]
+            # 過濾掉常見的無用詞
+            filtered = [t for t in chinese_texts if t not in ['統一發票', '電子發票', '營業稅', '總計', '合計']]
             if filtered:
                 result['merchant'] = max(filtered, key=len)
 
+        # 如果沒找到中文商家名，找英文
         if not result['merchant']:
             english_match = re.search(r'[A-Za-z]+', text)
             if english_match:
                 result['merchant'] = english_match.group()
 
+        # 預設商家名稱
         if not result['merchant']:
             result['merchant'] = '未知商家'
 
-        # 稅額計算
+        # 稅額計算（台灣營業稅5%）
         if result['amount'] > 0:
             result['tax_amount'] = round(result['amount'] * 0.05)
 
         return result
 
     def _brutal_categorize(self, merchant: str) -> str:
-        """暴力分類"""
+        """暴力分類：看商家名包含什麼關鍵字"""
+
         if not merchant:
             return '雜費'
 
@@ -298,80 +212,70 @@ class BrutalReceiptAI:
                 if keyword.lower() in merchant_lower:
                     return category
 
-        return '雜費'
+        return '雜費'  # 預設分類
 
 
 # 建立AI實例
 ai = BrutalReceiptAI()
 
 
+# API路由
 @app.post("/upload-receipt")
 async def upload_receipt(file: UploadFile = File(...)):
     """拍照上傳發票，自動辨識存檔"""
 
     try:
-        # 檢查檔案類型
+        # 1. 檢查檔案類型
         if not file.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail="請上傳圖片檔案")
 
-        # 使用臨時檔案（雲端友善）
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+        # 2. 儲存照片
+        file_id = str(uuid.uuid4())
+        file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+        file_path = f"uploads/{file_id}.{file_extension}"
+
+        with open(file_path, "wb") as f:
             content = await file.read()
-            tmp_file.write(content)
-            file_path = tmp_file.name
+            f.write(content)
 
         print(f"📁 檔案已儲存: {file_path}")
 
-        # AI辨識
+        # 3. AI暴力辨識
         receipt_data = ai.process_receipt(file_path)
 
-        # 存入資料庫
-        try:
-            conn = sqlite3.connect('receipts.db')
-            cursor = conn.cursor()
+        # 4. 存入資料庫
+        conn = sqlite3.connect('receipts.db')
+        cursor = conn.cursor()
 
-            cursor.execute('''
-                INSERT INTO receipts 
-                (photo_path, invoice_number, date, merchant, amount, tax_amount, category, description)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                file_path,
-                receipt_data['invoice_number'],
-                receipt_data['date'],
-                receipt_data['merchant'],
-                receipt_data['amount'],
-                receipt_data['tax_amount'],
-                receipt_data['category'],
-                f"自動辨識: {receipt_data['merchant']}"
-            ))
+        cursor.execute('''
+            INSERT INTO receipts 
+            (photo_path, invoice_number, date, merchant, amount, tax_amount, category, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            file_path,
+            receipt_data['invoice_number'],
+            receipt_data['date'],
+            receipt_data['merchant'],
+            receipt_data['amount'],
+            receipt_data['tax_amount'],
+            receipt_data['category'],
+            f"自動辨識: {receipt_data['merchant']}"
+        ))
 
-            receipt_id = cursor.lastrowid
-            conn.commit()
-            conn.close()
+        receipt_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
 
-            print(f"💾 資料已存入資料庫，ID: {receipt_id}")
+        print(f"💾 資料已存入資料庫，ID: {receipt_id}")
 
-            # 清理臨時檔案
-            try:
-                os.unlink(file_path)
-            except:
-                pass
-
-            return {
-                "success": True,
-                "message": "發票辨識完成！",
-                "data": {
-                    **receipt_data,
-                    "id": receipt_id
-                }
+        return {
+            "success": True,
+            "message": "發票辨識完成！",
+            "data": {
+                **receipt_data,
+                "id": receipt_id
             }
-
-        except Exception as db_error:
-            print(f"資料庫錯誤: {db_error}")
-            return {
-                "success": False,
-                "error": f"資料庫錯誤: {str(db_error)}"
-            }
+        }
 
     except Exception as e:
         print(f"❌ 錯誤: {str(e)}")
@@ -398,6 +302,7 @@ def get_receipts(limit: int = 50):
         receipts = cursor.fetchall()
         conn.close()
 
+        # 轉換為字典格式
         result = []
         for receipt in receipts:
             result.append({
@@ -412,7 +317,7 @@ def get_receipts(limit: int = 50):
         return {"receipts": result}
 
     except Exception as e:
-        return {"receipts": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=f"資料庫錯誤: {str(e)}")
 
 
 @app.get("/monthly-report/{year}/{month}")
@@ -422,6 +327,7 @@ def monthly_report(year: int, month: int):
         conn = sqlite3.connect('receipts.db')
         cursor = conn.cursor()
 
+        # 該月所有支出（按分類統計）
         cursor.execute('''
             SELECT category, SUM(amount), COUNT(*) 
             FROM receipts 
@@ -432,6 +338,7 @@ def monthly_report(year: int, month: int):
 
         categories = cursor.fetchall()
 
+        # 總計
         cursor.execute('''
             SELECT SUM(amount), SUM(tax_amount), COUNT(*) 
             FROM receipts 
@@ -439,6 +346,18 @@ def monthly_report(year: int, month: int):
         ''', (f"{year}-{month:02d}%",))
 
         total = cursor.fetchone()
+
+        # 每日支出
+        cursor.execute('''
+            SELECT date, SUM(amount), COUNT(*)
+            FROM receipts 
+            WHERE date LIKE ?
+            GROUP BY date
+            ORDER BY date
+        ''', (f"{year}-{month:02d}%",))
+
+        daily_expenses = cursor.fetchall()
+
         conn.close()
 
         return {
@@ -449,18 +368,62 @@ def monthly_report(year: int, month: int):
             "by_category": [
                 {"category": c[0], "amount": c[1], "count": c[2]}
                 for c in categories
+            ],
+            "daily_expenses": [
+                {"date": d[0], "amount": d[1], "count": d[2]}
+                for d in daily_expenses
             ]
         }
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"報表錯誤: {str(e)}")
+
+
+@app.get("/yearly-summary/{year}")
+def yearly_summary(year: int):
+    """年度總結"""
+    try:
+        conn = sqlite3.connect('receipts.db')
+        cursor = conn.cursor()
+
+        # 年度總計
+        cursor.execute('''
+            SELECT SUM(amount), SUM(tax_amount), COUNT(*)
+            FROM receipts 
+            WHERE date LIKE ?
+        ''', (f"{year}%",))
+
+        annual_total = cursor.fetchone()
+
+        # 月度統計
+        monthly_data = []
+        for month in range(1, 13):
+            cursor.execute('''
+                SELECT SUM(amount), COUNT(*)
+                FROM receipts 
+                WHERE date LIKE ?
+            ''', (f"{year}-{month:02d}%",))
+
+            month_data = cursor.fetchone()
+            monthly_data.append({
+                "month": f"{year}-{month:02d}",
+                "amount": month_data[0] or 0,
+                "count": month_data[1] or 0
+            })
+
+        conn.close()
+
         return {
-            "period": f"{year}-{month:02d}",
-            "total_amount": 0,
-            "total_tax": 0,
-            "total_receipts": 0,
-            "by_category": [],
-            "error": str(e)
+            "year": year,
+            "total_expense": annual_total[0] or 0,
+            "total_tax": annual_total[1] or 0,
+            "total_receipts": annual_total[2] or 0,
+            "monthly_breakdown": monthly_data,
+            "average_monthly": (annual_total[0] or 0) / 12
         }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"年度報表錯誤: {str(e)}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -615,6 +578,7 @@ def main_page():
         </div>
 
         <script>
+            // 檔案選擇處理
             document.getElementById('file').onchange = async function(e) {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -645,6 +609,7 @@ def main_page():
                             </div>
                         `;
 
+                        // 重新載入統計資料
                         loadStats();
                         loadRecentReceipts();
 
@@ -653,6 +618,7 @@ def main_page():
                             <div class="result error">
                                 <h3>❌ 辨識失敗</h3>
                                 <p>${result.error}</p>
+                                <p>💡 請確保照片清晰，包含完整發票資訊</p>
                             </div>
                         `;
                     }
@@ -665,19 +631,21 @@ def main_page():
                     `;
                 }
 
+                // 清空檔案選擇
                 document.getElementById('file').value = '';
             };
 
+            // 載入統計資料
             async function loadStats() {
                 try {
                     const now = new Date();
                     const response = await fetch(`/monthly-report/${now.getFullYear()}/${now.getMonth() + 1}`);
                     const data = await response.json();
 
-                    document.getElementById('monthlyTotal').textContent = `$${(data.total_amount || 0).toLocaleString()}`;
-                    document.getElementById('monthlyCount').textContent = data.total_receipts || 0;
+                    document.getElementById('monthlyTotal').textContent = `$${data.total_amount.toLocaleString()}`;
+                    document.getElementById('monthlyCount').textContent = data.total_receipts;
 
-                    const avg = (data.total_receipts || 0) > 0 ? (data.total_amount || 0) / (data.total_receipts || 0) : 0;
+                    const avg = data.total_receipts > 0 ? data.total_amount / data.total_receipts : 0;
                     document.getElementById('avgAmount').textContent = `$${Math.round(avg)}`;
 
                 } catch (error) {
@@ -685,39 +653,36 @@ def main_page():
                 }
             }
 
+            // 載入最近記錄
             async function loadRecentReceipts() {
                 try {
                     const response = await fetch('/receipts?limit=10');
                     const data = await response.json();
 
                     let html = '';
-                    if (data.receipts && data.receipts.length > 0) {
-                        data.receipts.forEach(receipt => {
-                            html += `
-                                <div class="receipt-item">
-                                    <div>
-                                        <strong>${receipt.merchant}</strong><br>
-                                        <small>${receipt.date}</small>
-                                    </div>
-                                    <div style="text-align: right;">
-                                        <div class="receipt-amount">$${receipt.amount}</div>
-                                        <div class="receipt-category">${receipt.category}</div>
-                                    </div>
+                    data.receipts.forEach(receipt => {
+                        html += `
+                            <div class="receipt-item">
+                                <div>
+                                    <strong>${receipt.merchant}</strong><br>
+                                    <small>${receipt.date}</small>
                                 </div>
-                            `;
-                        });
-                    } else {
-                        html = '<p style="text-align: center; color: #666;">還沒有記錄，快拍第一張發票吧！</p>';
-                    }
+                                <div style="text-align: right;">
+                                    <div class="receipt-amount">$${receipt.amount}</div>
+                                    <div class="receipt-category">${receipt.category}</div>
+                                </div>
+                            </div>
+                        `;
+                    });
 
-                    document.getElementById('recentList').innerHTML = html;
+                    document.getElementById('recentList').innerHTML = html || '<p style="text-align: center; color: #666;">還沒有記錄，快拍第一張發票吧！</p>';
 
                 } catch (error) {
                     console.error('載入最近記錄失敗:', error);
-                    document.getElementById('recentList').innerHTML = '<p style="text-align: center; color: #666;">載入記錄時發生錯誤</p>';
                 }
             }
 
+            // 頁面載入時初始化
             window.onload = function() {
                 loadStats();
                 loadRecentReceipts();
@@ -728,21 +693,12 @@ def main_page():
     """
 
 
-# 健康檢查端點
-@app.get("/health")
-def health_check():
-    """健康檢查"""
-    return {"status": "ok", "message": "暴力記帳系統運行正常！"}
-
-
 # 啟動應用
 if __name__ == "__main__":
     import uvicorn
     import os
 
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8080))  # 改成 8080
     print("🚀 啟動暴力記帳系統...")
     print(f"📱 訪問網址: http://localhost:{port}")
-    print("🛑 按 Ctrl+C 停止服務")
-
     uvicorn.run(app, host="0.0.0.0", port=port)
