@@ -4,21 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="05283085-3fc0-4982-94d3-684eae6384a3" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/PythonProject.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/python main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/receipts.db" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/uploads/42fc7fb7-e73b-4d5e-94a9-f8a8326c553d.webp" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/uploads/c14e42ef-ff59-4cdf-bd8c-07a696e0cf7c.jpg" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/記帳庫.py" afterDir="false" />
-    </list>
+    <list default="true" id="05283085-3fc0-4982-94d3-684eae6384a3" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -78,7 +64,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1750009536843</updated>
-      <workItem from="1750009537934" duration="1538000" />
+      <workItem from="1750009537934" duration="1849000" />
     </task>
     <servers />
   </component>
