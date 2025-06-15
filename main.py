@@ -697,7 +697,8 @@ def main_page():
 if __name__ == "__main__":
     import uvicorn
     import os
-    port = int(os.environ.get("PORT", 8000))
+
+    port = int(os.environ.get("PORT", 8080))  # 改成 8080
     print("🚀 啟動暴力記帳系統...")
     print(f"📱 訪問網址: http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
