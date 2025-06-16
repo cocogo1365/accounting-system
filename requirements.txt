@@ -1,5 +1,10 @@
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
-pillow==10.1.0
-requests==2.31.0
+pillow==11.2.1
+requests==2.32.4
+easyocr==1.7.0
+numpy==2.3.0
+torch==2.7.1
+torchvision==0.22.1
+opencv-python-headless==4.11.0.86

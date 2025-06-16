@@ -539,9 +539,27 @@ init_database()
 
 class FreeReceiptAI:
     def __init__(self):
-        # 使用輕量級模式，不依賴EasyOCR
-        self.ocr_available = True  # 設為True，但使用模擬模式
-        print("🔧 輕量級AI模式啟動（兼容Railway）")
+        # PIL版本兼容性修復
+        try:
+            from PIL import Image
+            if not hasattr(Image, 'ANTIALIAS'):
+                Image.ANTIALIAS = Image.LANCZOS
+                print("🔧 PIL兼容性修復：ANTIALIAS -> LANCZOS")
+            if not hasattr(Image, 'BICUBIC'):
+                Image.BICUBIC = Image.LANCZOS
+                print("🔧 PIL兼容性修復：BICUBIC -> LANCZOS")
+        except Exception as e:
+            print(f"⚠️ PIL兼容性修復失敗: {e}")
+
+        # 初始化 EasyOCR（支援繁體中文）
+        try:
+            import easyocr
+            self.reader = easyocr.Reader(['ch_tra', 'en'], gpu=False)
+            print("🔧 EasyOCR 初始化完成（支援繁體中文）")
+            self.ocr_available = True
+        except Exception as e:
+            print(f"⚠️ EasyOCR 初始化失敗: {e}")
+            self.ocr_available = False
 
         # 載入分類關鍵字
         self.categories = self.load_categories()
@@ -577,192 +595,124 @@ class FreeReceiptAI:
             }
 
     async def process_receipt(self, image_path: str) -> Dict:
-        """處理發票：輕量級智能模擬"""
+        """處理發票：真實EasyOCR → 智能解析 → 自動分類"""
 
         print(f"🔍 開始處理發票: {image_path}")
 
-        # 使用增強的模擬OCR（基於圖片大小和時間生成不同結果）
-        ocr_result = await self._smart_simulate_ocr(image_path)
+        # 1. 真實EasyOCR辨識
+        if self.ocr_available:
+            ocr_result = await self._real_ocr(image_path)
+        else:
+            ocr_result = self._simulate_ocr()
+
         text = ocr_result['text']
         confidence = ocr_result['confidence']
 
-        print(f"📝 智能模擬OCR結果 (信心度: {confidence:.2f}): {text[:100]}...")
+        print(f"📝 OCR結果 (信心度: {confidence:.2f}): {text[:100]}...")
 
-        # 智能解析發票資料
+        # 2. 智能解析發票資料
         data = await self._smart_parse(text)
         data['ocr_confidence'] = confidence
 
         print(f"🔧 解析結果: {data}")
 
-        # 智能分類
+        # 3. 智能分類
         data['category'] = self._smart_categorize(data['merchant'], text)
         print(f"🏷️ 分類結果: {data['category']}")
 
         return data
 
-    async def _smart_simulate_ocr(self, image_path: str) -> Dict:
-        """智能模擬OCR - 基於圖片特徵生成不同結果"""
+    async def _real_ocr(self, image_path: str) -> Dict:
+        """使用 EasyOCR 進行真實文字辨識"""
 
         try:
-            # 讀取圖片基本信息來生成不同的模擬結果
             from PIL import Image
-            import os
+            import numpy as np
 
-            # 獲取文件大小和時間戳作為隨機種子
-            file_size = os.path.getsize(image_path)
-            import time
-            current_time = int(time.time()) % 1000
+            # 前處理圖片
+            image = Image.open(image_path)
 
-            # 基於文件特徵選擇不同的發票模板
-            seed = (file_size + current_time) % 10
+            # 如果圖片太大，縮小以提高處理速度
+            max_size = 1600
+            if max(image.size) > max_size:
+                ratio = max_size / max(image.size)
+                new_size = (int(image.width * ratio), int(image.height * ratio))
+                image = image.resize(new_size, Image.LANCZOS)
+                print(f"🔧 圖片已縮放至: {new_size}")
+
+            # 轉換為 numpy array
+            img_array = np.array(image)
+
+            # 使用 EasyOCR 辨識
+            print("🔍 EasyOCR 正在辨識...")
+            results = self.reader.readtext(img_array)
+
+            # 合併所有辨識的文字
+            full_text = ""
+            total_confidence = 0
+
+            for (bbox, text, confidence) in results:
+                full_text += text + "\n"
+                total_confidence += confidence
+                print(f"   辨識到: {text} (信心度: {confidence:.2f})")
+
+            # 計算平均信心度
+            avg_confidence = total_confidence / len(results) if results else 0
+
+            print(f"✅ EasyOCR 辨識完成，平均信心度: {avg_confidence:.2f}")
+
+            return {
+                'text': full_text,
+                'confidence': avg_confidence,
+                'source': 'easyocr_real'
+            }
 
         except Exception as e:
-            print(f"讀取圖片失敗: {e}")
-            import random
-            seed = random.randint(0, 9)
+            print(f"⚠️ EasyOCR 處理失敗: {e}")
+            print("🔄 切換到模擬模式...")
+            return self._simulate_ocr()
 
-        # 多樣化的台灣發票模板
-        receipt_templates = [
-            # 0: 便利商店
-            {
-                'text': f"""統一發票 AA{12345678 + seed}
-114年06月16日 {10 + seed}:{20 + seed}
-全家便利商店 信義店
-統編: 22099131
-御飯糰-鮭魚: 35
-茶葉蛋: 13
-小計: 48
-營業稅: 2
-總計: 50""",
-                'confidence': 0.88
-            },
-            # 1: 星巴克
-            {
-                'text': f"""電子發票 BB{87654321 + seed}
-114/06/16 {14 + seed}:{30 + seed}
-星巴克咖啡 台北101店
-統編: 28555485
-美式咖啡 大杯: 130
-巧克力瑪芬: 95
-小計: 225
-營業稅: 11
-總計: 236""",
-                'confidence': 0.92
-            },
-            # 2: 麥當勞
-            {
-                'text': f"""統一發票 CC{11223344 + seed}
-114年6月16日 {12 + seed}:{45 + seed}
-麥當勞 忠孝店
+    def _simulate_ocr(self) -> Dict:
+        """備用模擬OCR"""
+        fake_receipts = [
+            """統一發票
+PA50921578
+114年06月16日
+來麵屋
 統編: 12345678
-大麥克套餐: 149
-薯條升級大: 15
-可樂: 25
-合計: 189""",
-                'confidence': 0.85
-            },
-            # 3: 加油站
-            {
-                'text': f"""統一發票 DD{55667788 + seed}
+品項: 拉麵
+數量: 1
+單價: 120
+營業稅: 6
+總計: 126""",
+            """電子發票
+AB87654321
 114年06月16日
-中油加油站 南港站
-統編: 03212801
-95無鉛汽油
-公升數: {20 + seed}.5
-單價: 30.2
-金額: {(20 + seed) * 30 + 100}
-營業稅: {((20 + seed) * 30 + 100) // 20}
-總計: {(20 + seed) * 30 + 100 + ((20 + seed) * 30 + 100) // 20}""",
-                'confidence': 0.90
-            },
-            # 4: 誠品書店
-            {
-                'text': f"""電子發票 EE{99887766 + seed}
+全家便利商店
+統編: 22099131
+商品: 御飯糰
+數量: 2
+金額: 58
+含稅總計: 58""",
+            """統一發票
+CD11223344
 114年06月16日
-誠品書店 信義店
-統編: 70762958
-Python程式設計: 450
-筆記本: 89
-小計: 539
-營業稅: 26
-總計: 565""",
-                'confidence': 0.87
-            },
-            # 5: 屈臣氏
-            {
-                'text': f"""統一發票 FF{13579246 + seed}
-114/06/16
-屈臣氏 松山店
-統編: 12345679
-洗髮精: 199
-面膜: 129
-牙膏: 78
-小計: 406
-營業稅: 19
-總計: 425""",
-                'confidence': 0.83
-            },
-            # 6: 計程車
-            {
-                'text': f"""電子發票 GG{24681357 + seed}
-114年06月16日
-台灣大車隊
-統編: 53860527
-車資: {180 + seed * 10}
-總計: {180 + seed * 10}""",
-                'confidence': 0.78
-            },
-            # 7: 餐廳
-            {
-                'text': f"""統一發票 HH{97531864 + seed}
-114年6月16日
-來麵屋 西門店
-統編: 87654321
-豚骨拉麵: 180
-煎餃: 120
-可樂: 35
-小計: 335
-營業稅: 16
-總計: 351""",
-                'confidence': 0.91
-            },
-            # 8: 藥局
-            {
-                'text': f"""電子發票 II{36925814 + seed}
-114年06月16日
-康是美藥妝店
-統編: 22555485
-維他命C: 299
-OK繃: 45
-總計: 344""",
-                'confidence': 0.86
-            },
-            # 9: 電影院
-            {
-                'text': f"""統一發票 JJ{15975348 + seed}
-114年06月16日
-威秀影城 信義店
-統編: 80256748
-電影票: 350
-爆米花: 120
-可樂: 65
-小計: 535
-營業稅: 25
-總計: 560""",
-                'confidence': 0.84
-            }
+星巴克咖啡
+統編: 28555485
+美式咖啡: 130
+蛋糕: 85
+總計: 215"""
         ]
 
-        template = receipt_templates[seed]
-
+        import random
         return {
-            'text': template['text'],
-            'confidence': template['confidence'],
-            'source': 'smart_simulation'
+            'text': random.choice(fake_receipts),
+            'confidence': 0.85,
+            'source': 'simulation_fallback'
         }
 
     async def _smart_parse(self, text: str) -> Dict:
-        """智能解析發票內容（與之前相同）"""
+        """智能解析發票內容"""
 
         result = {
             'invoice_number': '',
@@ -773,18 +723,22 @@ OK繃: 45
             'items': []
         }
 
-        # 發票號碼
+        # 發票號碼：兩個英文字母+8個數字
         invoice_match = re.search(r'[A-Z]{2}[\-]?[0-9]{8}', text)
         if invoice_match:
             result['invoice_number'] = invoice_match.group().replace('-', '')
 
-        # 總金額
+        # 總金額：更全面的模式匹配
         amount_patterns = [
             r'總計[：:\s]*\$?[\s]*(\d{1,6})',
             r'合計[：:\s]*\$?[\s]*(\d{1,6})',
             r'含稅總計[：:\s]*(\d{1,6})',
             r'總金額[：:\s]*(\d{1,6})',
-            r'金額[：:\s]*(\d{1,6})'
+            r'小計[：:\s]*(\d{1,6})',
+            r'金額[：:\s]*(\d{1,6})',
+            r'NT\$[\s]*(\d{1,6})',
+            r'應收[：:\s]*(\d{1,6})',
+            r'收費[：:\s]*(\d{1,6})'
         ]
 
         for pattern in amount_patterns:
@@ -793,28 +747,40 @@ OK繃: 45
                 result['amount'] = int(match.group(1))
                 break
 
+        # 如果沒找到總計，找最大的數字（但過濾掉明顯不是金額的）
         if result['amount'] == 0:
             numbers = re.findall(r'\d{1,6}', text)
             if numbers:
-                amounts = [int(n) for n in numbers if 20 <= int(n) <= 99999 and len(n) <= 5]
+                amounts = []
+                for n in numbers:
+                    num = int(n)
+                    # 合理的金額範圍：10-99999
+                    if 10 <= num <= 99999 and len(n) <= 5:
+                        # 排除常見的非金額數字
+                        if not (len(n) == 8 or len(n) == 10):  # 排除統編、電話
+                            amounts.append(num)
+
                 if amounts:
                     result['amount'] = max(amounts)
 
         # 日期解析
         date_patterns = [
-            r'(\d{2,3})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',
-            r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',
+            r'(\d{2,3})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',  # 民國年
+            r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',  # 西元年
+            r'(\d{4})/(\d{1,2})/(\d{1,2})',  # 2024/12/16
+            r'(\d{4})-(\d{1,2})-(\d{1,2})',  # 2024-12-16
         ]
 
         for pattern in date_patterns:
             date_match = re.search(pattern, text)
             if date_match:
                 year = int(date_match.group(1))
-                if year < 1000:
+                if year < 1000:  # 民國年轉西元年
                     year += 1911
                 month = int(date_match.group(2))
                 day = int(date_match.group(3))
 
+                # 驗證日期合理性
                 if 1 <= month <= 12 and 1 <= day <= 31:
                     result['date'] = f"{year}-{month:02d}-{day:02d}"
                     break
@@ -822,11 +788,13 @@ OK繃: 45
         if not result['date']:
             result['date'] = datetime.now().strftime('%Y-%m-%d')
 
-        # 商家名稱
+        # 商家名稱辨識（針對台灣商家優化）
         merchant_patterns = [
-            r'(來麵屋|星巴克|麥當勞|肯德基|全家|7-ELEVEN|誠品|屈臣氏|康是美|中油|威秀|台灣大車隊)',
-            r'([\u4e00-\u9fff]+(?:麵屋|餐廳|咖啡|書店|藥局|醫院|診所|便利商店|加油站|影城|藥妝店))',
+            # 台灣常見店家格式
+            r'(來麵屋|星巴克|麥當勞|肯德基|全家|7-ELEVEN|誠品|屈臣氏|康是美|中油)',
+            r'([\u4e00-\u9fff]+(?:麵屋|餐廳|咖啡|書店|藥局|醫院|診所|便利商店|加油站))',
             r'([\u4e00-\u9fff]+(?:公司|企業|行|店|館|廳|坊|屋|社|中心))',
+            r'([A-Za-z]+(?:Starbucks|McDonald|KFC|FamilyMart))',
         ]
 
         for pattern in merchant_patterns:
@@ -835,13 +803,16 @@ OK繃: 45
                 result['merchant'] = merchant_match.group(1)
                 break
 
+        # 如果沒找到，找最長的中文字串
         if not result['merchant']:
             chinese_texts = re.findall(r'[\u4e00-\u9fff]+', text)
             if chinese_texts:
+                # 過濾掉常見的無用詞
                 filtered = [t for t in chinese_texts
                             if t not in ['統一發票', '電子發票', '營業稅', '總計', '合計', '小計',
                                          '品項', '數量', '單價', '金額', '日期', '時間', '發票號碼']]
                 if filtered:
+                    # 優先選擇長度適中的（2-8字）
                     suitable = [t for t in filtered if 2 <= len(t) <= 8]
                     if suitable:
                         result['merchant'] = max(suitable, key=len)
@@ -853,9 +824,11 @@ OK繃: 45
 
         # 稅額計算
         if result['amount'] > 0:
+            # 先嘗試找明確的稅額
             tax_patterns = [
                 r'營業稅[：:\s]*(\d{1,4})',
                 r'稅額[：:\s]*(\d{1,4})',
+                r'TAX[：:\s]*(\d{1,4})',
             ]
 
             for pattern in tax_patterns:
@@ -864,18 +837,22 @@ OK繃: 45
                     result['tax_amount'] = int(tax_match.group(1))
                     break
 
+            # 如果沒找到，按5%計算
             if result['tax_amount'] == 0:
                 result['tax_amount'] = round(result['amount'] * 0.05)
 
         return result
 
     def _smart_categorize(self, merchant: str, full_text: str) -> str:
-        """智能分類（與之前相同）"""
+        """智能分類：結合商家名稱和發票內容"""
 
         if not merchant:
             return '雜費'
 
+        # 合併商家名稱和發票內容進行分析
         analysis_text = f"{merchant} {full_text}".lower()
+
+        # 計算每個分類的匹配分數
         category_scores = {}
 
         for category, keywords in self.categories.items():
@@ -883,21 +860,27 @@ OK繃: 45
             for keyword in keywords:
                 keyword_lower = keyword.lower()
 
+                # 商家名稱完全匹配：高分
                 if keyword_lower in merchant.lower():
                     score += 10
+
+                # 發票內容包含：中等分
                 elif keyword_lower in analysis_text:
                     score += 3
+
+                # 部分匹配：低分
                 elif any(part in analysis_text for part in keyword_lower.split() if len(part) > 2):
                     score += 1
 
             category_scores[category] = score
 
+        # 選擇分數最高的分類
         if category_scores:
             best_category = max(category_scores.items(), key=lambda x: x[1])
-            if best_category[1] > 0:
+            if best_category[1] > 0:  # 有匹配分數
                 return best_category[0]
 
-        return '雜費'
+        return '雜費'  # 預設分類
 
 
 # 建立AI實例
