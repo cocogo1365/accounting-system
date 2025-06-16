@@ -21,87 +21,507 @@ app = FastAPI(title="暴力記帳系統", description="拍照→辨識→記帳�
 
 # 資料庫初始化函式
 def init_database():
-    """初始化資料庫和表格"""
+    """初始化完整的小型公司記帳資料庫"""
     try:
         conn = sqlite3.connect('receipts.db')
         cursor = conn.cursor()
 
-        # 建立公司表
+        print("🏗️ 建立小型公司記帳資料庫...")
+
+        # 1. 公司基本資料表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS company (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                tax_id TEXT,
+                tax_id TEXT UNIQUE,
                 address TEXT,
+                phone TEXT,
+                email TEXT,
+                website TEXT,
+                industry TEXT,
+                founded_date TEXT,
+                capital REAL DEFAULT 0,
+                fiscal_year_start INTEGER DEFAULT 1,
+                accounting_method TEXT DEFAULT 'accrual',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 2. 員工管理表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS employees (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id TEXT UNIQUE,
+                name TEXT NOT NULL,
+                email TEXT,
+                phone TEXT,
+                department TEXT,
+                position TEXT,
+                salary REAL DEFAULT 0,
+                start_date TEXT,
+                end_date TEXT,
+                status TEXT DEFAULT 'active',
+                expense_limit REAL DEFAULT 5000,
+                can_approve BOOLEAN DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        # 建立分類表
+        # 3. 部門/費用中心表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS departments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                manager_id INTEGER REFERENCES employees(id),
+                budget_monthly REAL DEFAULT 0,
+                budget_annual REAL DEFAULT 0,
+                description TEXT,
+                status TEXT DEFAULT 'active',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 4. 專案管理表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                client_name TEXT,
+                start_date TEXT,
+                end_date TEXT,
+                budget REAL DEFAULT 0,
+                actual_cost REAL DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                manager_id INTEGER REFERENCES employees(id),
+                description TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 5. 供應商管理表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE,
+                name TEXT NOT NULL,
+                tax_id TEXT,
+                contact_person TEXT,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                payment_terms TEXT DEFAULT 'NET30',
+                credit_limit REAL DEFAULT 0,
+                bank_account TEXT,
+                bank_name TEXT,
+                status TEXT DEFAULT 'active',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 6. 客戶管理表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE,
+                name TEXT NOT NULL,
+                tax_id TEXT,
+                contact_person TEXT,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                payment_terms TEXT DEFAULT 'NET30',
+                credit_limit REAL DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 7. 會計科目表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chart_of_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_code TEXT UNIQUE NOT NULL,
+                account_name TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                parent_code TEXT,
+                level INTEGER DEFAULT 1,
+                is_active BOOLEAN DEFAULT 1,
+                description TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 8. 分類表（支出分類）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 keywords TEXT,
+                account_code TEXT REFERENCES chart_of_accounts(account_code),
                 tax_deductible BOOLEAN DEFAULT 1,
+                requires_receipt BOOLEAN DEFAULT 1,
+                requires_approval BOOLEAN DEFAULT 0,
+                approval_limit REAL DEFAULT 0,
+                description TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        # 建立發票記錄表
+        # 9. 發票記錄表（主要交易表）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS receipts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                receipt_type TEXT DEFAULT 'expense',
                 photo_path TEXT,
                 invoice_number TEXT,
-                date TEXT,
+                date TEXT NOT NULL,
+                due_date TEXT,
+
+                -- 商家/供應商資訊
                 merchant TEXT,
+                supplier_id INTEGER REFERENCES suppliers(id),
+                supplier_tax_id TEXT,
+
+                -- 金額資訊
                 amount REAL DEFAULT 0,
                 tax_amount REAL DEFAULT 0,
+                tax_rate REAL DEFAULT 0.05,
+                net_amount REAL DEFAULT 0,
+
+                -- 分類和會計
                 category TEXT DEFAULT '雜費',
+                account_code TEXT REFERENCES chart_of_accounts(account_code),
+                department_id INTEGER REFERENCES departments(id),
+                project_id INTEGER REFERENCES projects(id),
+
+                -- 審核狀態
+                status TEXT DEFAULT 'pending',
+                submitted_by INTEGER REFERENCES employees(id),
+                approved_by INTEGER REFERENCES employees(id),
+                approved_at TEXT,
+
+                -- AI 和處理資訊
                 description TEXT,
+                notes TEXT,
                 is_business BOOLEAN DEFAULT 1,
+                is_recurring BOOLEAN DEFAULT 0,
+                recurring_frequency TEXT,
                 ocr_confidence REAL DEFAULT 0,
+
+                -- 付款資訊
+                payment_method TEXT,
+                payment_status TEXT DEFAULT 'unpaid',
+                paid_date TEXT,
+                paid_amount REAL DEFAULT 0,
+
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 10. 銀行帳戶表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bank_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_name TEXT NOT NULL,
+                bank_name TEXT NOT NULL,
+                account_number TEXT,
+                account_type TEXT DEFAULT 'checking',
+                currency TEXT DEFAULT 'TWD',
+                opening_balance REAL DEFAULT 0,
+                current_balance REAL DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        # 插入預設分類（如果不存在）
+        # 11. 銀行交易記錄表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bank_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_account_id INTEGER REFERENCES bank_accounts(id),
+                transaction_date TEXT NOT NULL,
+                description TEXT,
+                reference_number TEXT,
+                debit_amount REAL DEFAULT 0,
+                credit_amount REAL DEFAULT 0,
+                balance REAL DEFAULT 0,
+                category TEXT,
+                receipt_id INTEGER REFERENCES receipts(id),
+                reconciled BOOLEAN DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 12. 預算管理表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS budgets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                budget_year INTEGER NOT NULL,
+                budget_month INTEGER,
+                department_id INTEGER REFERENCES departments(id),
+                project_id INTEGER REFERENCES projects(id),
+                category_id INTEGER REFERENCES categories(id),
+                budgeted_amount REAL DEFAULT 0,
+                actual_amount REAL DEFAULT 0,
+                variance_amount REAL DEFAULT 0,
+                variance_percentage REAL DEFAULT 0,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 13. 報銷申請表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS expense_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                claim_number TEXT UNIQUE,
+                employee_id INTEGER REFERENCES employees(id),
+                claim_date TEXT NOT NULL,
+                total_amount REAL DEFAULT 0,
+                status TEXT DEFAULT 'draft',
+                submitted_date TEXT,
+                approved_date TEXT,
+                approved_by INTEGER REFERENCES employees(id),
+                paid_date TEXT,
+                purpose TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 14. 報銷明細表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS expense_claim_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                claim_id INTEGER REFERENCES expense_claims(id),
+                receipt_id INTEGER REFERENCES receipts(id),
+                expense_date TEXT NOT NULL,
+                description TEXT,
+                amount REAL DEFAULT 0,
+                category TEXT,
+                billable_to_client BOOLEAN DEFAULT 0,
+                client_id INTEGER REFERENCES customers(id),
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 15. 發票開立表（銷項）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS invoices_issued (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_number TEXT UNIQUE NOT NULL,
+                customer_id INTEGER REFERENCES customers(id),
+                invoice_date TEXT NOT NULL,
+                due_date TEXT,
+                subtotal REAL DEFAULT 0,
+                tax_amount REAL DEFAULT 0,
+                total_amount REAL DEFAULT 0,
+                status TEXT DEFAULT 'draft',
+                paid_amount REAL DEFAULT 0,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 16. 稅務記錄表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tax_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tax_year INTEGER NOT NULL,
+                tax_quarter INTEGER,
+                tax_type TEXT NOT NULL,
+                taxable_amount REAL DEFAULT 0,
+                tax_amount REAL DEFAULT 0,
+                tax_rate REAL DEFAULT 0,
+                status TEXT DEFAULT 'calculated',
+                filed_date TEXT,
+                paid_date TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        print("📋 建立資料表完成，開始插入預設資料...")
+
+        # 檢查並添加缺失的欄位（向後相容）
+        cursor.execute("PRAGMA table_info(receipts)")
+        columns = [column[1] for column in cursor.fetchall()]
+
+        missing_columns = [
+            ('ocr_confidence', 'REAL DEFAULT 0'),
+            ('department_id', 'INTEGER'),
+            ('project_id', 'INTEGER'),
+            ('supplier_id', 'INTEGER'),
+            ('status', 'TEXT DEFAULT "pending"'),
+            ('payment_status', 'TEXT DEFAULT "unpaid"')
+        ]
+
+        for column_name, column_def in missing_columns:
+            if column_name not in columns:
+                cursor.execute(f'ALTER TABLE receipts ADD COLUMN {column_name} {column_def}')
+                print(f"✅ 添加 {column_name} 欄位")
+
+        # 插入預設會計科目
+        cursor.execute('SELECT COUNT(*) FROM chart_of_accounts')
+        if cursor.fetchone()[0] == 0:
+            accounts = [
+                # 資產類
+                ('1000', '流動資產', 'Assets', None, 1),
+                ('1100', '現金及約當現金', 'Assets', '1000', 2),
+                ('1110', '庫存現金', 'Assets', '1100', 3),
+                ('1120', '銀行存款', 'Assets', '1100', 3),
+                ('1200', '應收帳款', 'Assets', '1000', 2),
+                ('1300', '存貨', 'Assets', '1000', 2),
+                ('1500', '固定資產', 'Assets', None, 1),
+                ('1510', '設備', 'Assets', '1500', 2),
+                ('1520', '累計折舊', 'Assets', '1500', 2),
+
+                # 負債類
+                ('2000', '流動負債', 'Liabilities', None, 1),
+                ('2100', '應付帳款', 'Liabilities', '2000', 2),
+                ('2200', '應付薪資', 'Liabilities', '2000', 2),
+                ('2300', '應付稅款', 'Liabilities', '2000', 2),
+
+                # 權益類
+                ('3000', '業主權益', 'Equity', None, 1),
+                ('3100', '股本', 'Equity', '3000', 2),
+                ('3200', '保留盈餘', 'Equity', '3000', 2),
+
+                # 收入類
+                ('4000', '營業收入', 'Revenue', None, 1),
+                ('4100', '銷貨收入', 'Revenue', '4000', 2),
+                ('4200', '服務收入', 'Revenue', '4000', 2),
+
+                # 費用類
+                ('5000', '營業費用', 'Expenses', None, 1),
+                ('5100', '銷貨成本', 'Expenses', '5000', 2),
+                ('5200', '薪資費用', 'Expenses', '5000', 2),
+                ('5300', '租金費用', 'Expenses', '5000', 2),
+                ('5400', '辦公費用', 'Expenses', '5000', 2),
+                ('5500', '差旅費', 'Expenses', '5000', 2),
+                ('5600', '餐費', 'Expenses', '5000', 2),
+                ('5700', '交通費', 'Expenses', '5000', 2),
+                ('5800', '軟體費用', 'Expenses', '5000', 2),
+                ('5900', '雜項費用', 'Expenses', '5000', 2),
+            ]
+
+            for code, name, acc_type, parent, level in accounts:
+                cursor.execute('''
+                    INSERT INTO chart_of_accounts (account_code, account_name, account_type, parent_code, level)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (code, name, acc_type, parent, level))
+
+            print("✅ 會計科目建立完成")
+
+        # 插入預設分類（連結會計科目）
         cursor.execute('SELECT COUNT(*) FROM categories')
         if cursor.fetchone()[0] == 0:
             categories = [
-                ('餐費', '餐廳,小吃,咖啡,便當,火鍋,燒烤,飲料,麥當勞,肯德基,星巴克,85度C', True),
-                ('交通', '加油,停車,高鐵,計程車,捷運,公車,機票,台鐵,客運,Uber', True),
-                ('辦公用品', '文具,紙張,印表機,電腦,筆,資料夾,誠品,金石堂', True),
-                ('軟體服務', '訂閱,SaaS,Office,Adobe,Google,AWS,Microsoft,Apple', True),
-                ('設備', '電腦,螢幕,鍵盤,滑鼠,椅子,桌子,3C,燦坤,全國電子', True),
-                ('購物', '百貨,量販,家樂福,全聯,好市多,大潤發,購物', True),
-                ('醫療', '藥局,醫院,診所,健保,醫療,康是美,屈臣氏', True),
-                ('娛樂', '電影,KTV,遊戲,娛樂,威秀,國賓', True),
-                ('雜費', '水電,電話,網路,清潔,維修,銀行,郵局', True)
+                ('餐費', '餐廳,小吃,咖啡,便當,火鍋,燒烤,飲料,麥當勞,肯德基,星巴克,85度C', '5600', True, True, False,
+                 1000),
+                ('交通費', '加油,停車,高鐵,計程車,捷運,公車,機票,台鐵,客運,Uber', '5700', True, True, False, 1000),
+                ('辦公用品', '文具,紙張,印表機,電腦,筆,資料夾,誠品,金石堂', '5400', True, True, False, 2000),
+                ('軟體服務', '訂閱,SaaS,Office,Adobe,Google,AWS,Microsoft,Apple', '5800', True, True, True, 5000),
+                ('設備採購', '電腦,螢幕,鍵盤,滑鼠,椅子,桌子,3C,燦坤,全國電子', '1510', True, True, True, 10000),
+                ('購物', '百貨,量販,家樂福,全聯,好市多,大潤發,購物', '5900', True, True, False, 3000),
+                ('醫療費用', '藥局,醫院,診所,健保,醫療,康是美,屈臣氏', '5900', True, True, False, 2000),
+                ('娛樂費用', '電影,KTV,遊戲,娛樂,威秀,國賓', '5900', False, True, False, 1000),
+                ('租金水電', '水電,電話,網路,房租,租金', '5300', True, True, False, 0),
+                ('薪資費用', '薪水,薪資,獎金,勞保,健保', '5200', True, False, True, 0),
+                ('差旅費用', '出差,住宿,飯店,旅館', '5500', True, True, True, 5000),
+                ('銀行手續費', '銀行,手續費,匯款,轉帳', '5900', True, False, False, 0),
+                ('雜項費用', '清潔,維修,郵資,快遞', '5900', True, True, False, 1000)
             ]
 
-            for name, keywords, tax_deductible in categories:
+            for name, keywords, acc_code, deductible, receipt_req, approval_req, approval_limit in categories:
                 cursor.execute('''
-                    INSERT INTO categories (name, keywords, tax_deductible)
-                    VALUES (?, ?, ?)
-                ''', (name, keywords, tax_deductible))
+                    INSERT INTO categories 
+                    (name, keywords, account_code, tax_deductible, requires_receipt, requires_approval, approval_limit)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (name, keywords, acc_code, deductible, receipt_req, approval_req, approval_limit))
 
-        # 插入公司資料（如果不存在）
+            print("✅ 支出分類建立完成")
+
+        # 插入預設部門
+        cursor.execute('SELECT COUNT(*) FROM departments')
+        if cursor.fetchone()[0] == 0:
+            departments = [
+                ('ADMIN', '行政管理部', 50000, 600000),
+                ('SALES', '業務部', 80000, 960000),
+                ('TECH', '技術部', 100000, 1200000),
+                ('MKT', '行銷部', 60000, 720000),
+                ('FIN', '財務部', 30000, 360000),
+                ('HR', '人力資源部', 40000, 480000)
+            ]
+
+            for code, name, monthly_budget, annual_budget in departments:
+                cursor.execute('''
+                    INSERT INTO departments (code, name, budget_monthly, budget_annual)
+                    VALUES (?, ?, ?, ?)
+                ''', (code, name, monthly_budget, annual_budget))
+
+            print("✅ 部門建立完成")
+
+        # 插入預設員工（系統管理員）
+        cursor.execute('SELECT COUNT(*) FROM employees')
+        if cursor.fetchone()[0] == 0:
+            cursor.execute('''
+                INSERT INTO employees 
+                (employee_id, name, email, department, position, salary, expense_limit, can_approve, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', ('ADMIN001', '系統管理員', 'admin@company.com', 'ADMIN', '系統管理員', 0, 999999, True, 'active'))
+
+            print("✅ 系統管理員建立完成")
+
+        # 插入公司基本資料
         cursor.execute('SELECT COUNT(*) FROM company')
         if cursor.fetchone()[0] == 0:
             cursor.execute('''
-                INSERT INTO company (name, tax_id, address)
-                VALUES (?, ?, ?)
-            ''', ('我的公司', '12345678', '台北市'))
+                INSERT INTO company 
+                (name, tax_id, address, phone, email, industry, capital, fiscal_year_start)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', ('我的公司', '12345678', '台北市信義區', '02-12345678',
+                  'info@mycompany.com', '軟體開發', 1000000, 1))
+
+            print("✅ 公司基本資料建立完成")
+
+        # 插入預設銀行帳戶
+        cursor.execute('SELECT COUNT(*) FROM bank_accounts')
+        if cursor.fetchone()[0] == 0:
+            cursor.execute('''
+                INSERT INTO bank_accounts 
+                (account_name, bank_name, account_number, account_type, opening_balance, current_balance)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', ('公司往來帳戶', '第一銀行', '123-456-789012', 'checking', 1000000, 1000000))
+
+            print("✅ 銀行帳戶建立完成")
 
         conn.commit()
         conn.close()
-        print("✅ 資料庫初始化完成")
+
+        print("🎉 小型公司記帳資料庫初始化完成！")
+        print("📊 包含功能：")
+        print("   • 基本會計科目 (30+ 科目)")
+        print("   • 員工管理 (1位系統管理員)")
+        print("   • 部門管理 (6個部門)")
+        print("   • 供應商/客戶管理")
+        print("   • 專案管理")
+        print("   • 預算管理")
+        print("   • 報銷流程")
+        print("   • 銀行對帳")
+        print("   • 稅務管理")
+        print("   • 發票管理")
+
         return True
 
     except Exception as e:
         print(f"❌ 資料庫初始化失敗: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
