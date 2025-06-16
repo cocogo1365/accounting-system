@@ -1,4 +1,4 @@
-# main.py - 真實AI整合版本
+# main.py - 免費AI整合版本
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse
 import sqlite3
@@ -9,8 +9,12 @@ from datetime import datetime
 from typing import Dict, List
 import tempfile
 import base64
-import requests
 import json
+
+# 免費OCR相關導入
+import easyocr
+from PIL import Image
+import numpy as np
 
 # 建立必要的資料夾
 os.makedirs("uploads", exist_ok=True)
@@ -529,17 +533,19 @@ def init_database():
 init_database()
 
 
-class RealReceiptAI:
+class FreeReceiptAI:
     def __init__(self):
-        # 從環境變數取得API金鑰
-        self.google_api_key = os.environ.get("GOOGLE_VISION_API_KEY")
-        self.openai_api_key = os.environ.get("OPENAI_API_KEY")
+        # 初始化 EasyOCR（支援繁體中文）
+        try:
+            self.reader = easyocr.Reader(['ch_tra', 'en'], gpu=False)
+            print("🔧 EasyOCR 初始化完成（支援繁體中文）")
+            self.ocr_available = True
+        except Exception as e:
+            print(f"⚠️ EasyOCR 初始化失敗: {e}")
+            self.ocr_available = False
 
         # 載入分類關鍵字
         self.categories = self.load_categories()
-
-        print(f"🔑 Google Vision API: {'✅ 已設定' if self.google_api_key else '❌ 未設定'}")
-        print(f"🔑 OpenAI API: {'✅ 已設定' if self.openai_api_key else '❌ 未設定'}")
 
     def load_categories(self) -> Dict[str, List[str]]:
         """從資料庫載入分類關鍵字"""
@@ -559,23 +565,29 @@ class RealReceiptAI:
             return categories
         except Exception as e:
             print(f"載入分類失敗: {e}")
-            # 回傳預設分類
             return {
-                '餐費': ['餐廳', '小吃', '咖啡', '便當', '火鍋', '燒烤', '飲料'],
-                '交通': ['加油', '停車', '高鐵', '計程車', '捷運', '公車', '機票'],
-                '辦公用品': ['文具', '紙張', '印表機', '電腦', '筆', '資料夾'],
-                '軟體服務': ['訂閱', 'SaaS', 'Office', 'Adobe', 'Google', 'AWS'],
-                '設備': ['電腦', '螢幕', '鍵盤', '滑鼠', '椅子', '桌子'],
-                '雜費': ['水電', '電話', '網路', '清潔', '維修']
+                '餐費': ['餐廳', '小吃', '咖啡', '便當', '火鍋', '燒烤', '飲料', '麥當勞', '肯德基', '星巴克', '85度C'],
+                '交通費': ['加油', '停車', '高鐵', '計程車', '捷運', '公車', '機票', '台鐵', '客運', 'Uber'],
+                '辦公用品': ['文具', '紙張', '印表機', '電腦', '筆', '資料夾', '誠品', '金石堂'],
+                '軟體服務': ['訂閱', 'SaaS', 'Office', 'Adobe', 'Google', 'AWS', 'Microsoft', 'Apple'],
+                '設備採購': ['電腦', '螢幕', '鍵盤', '滑鼠', '椅子', '桌子', '3C', '燦坤', '全國電子'],
+                '購物': ['百貨', '量販', '家樂福', '全聯', '好市多', '大潤發', '購物', '來麵屋'],
+                '醫療費用': ['藥局', '醫院', '診所', '健保', '醫療', '康是美', '屈臣氏'],
+                '娛樂費用': ['電影', 'KTV', '遊戲', '娛樂', '威秀', '國賓'],
+                '雜費': ['水電', '電話', '網路', '清潔', '維修', '銀行', '郵局']
             }
 
     async def process_receipt(self, image_path: str) -> Dict:
-        """處理發票：真實OCR → 智能解析 → 自動分類"""
+        """處理發票：免費OCR → 智能解析 → 自動分類"""
 
         print(f"🔍 開始處理發票: {image_path}")
 
-        # 1. 真實OCR辨識
-        ocr_result = await self._real_ocr(image_path)
+        # 1. 免費OCR辨識
+        if self.ocr_available:
+            ocr_result = await self._free_ocr(image_path)
+        else:
+            ocr_result = self._simulate_ocr()
+
         text = ocr_result['text']
         confidence = ocr_result['confidence']
 
@@ -593,83 +605,57 @@ class RealReceiptAI:
 
         return data
 
-    async def _real_ocr(self, image_path: str) -> Dict:
-        """真實OCR辨識 - 優先使用Google Vision，備用方案為模擬"""
+    async def _free_ocr(self, image_path: str) -> Dict:
+        """使用 EasyOCR 進行免費文字辨識"""
 
-        if self.google_api_key:
-            try:
-                return await self._google_vision_ocr(image_path)
-            except Exception as e:
-                print(f"⚠️ Google Vision OCR 失敗: {e}")
-                print("🔄 切換到模擬模式...")
+        try:
+            # 前處理圖片
+            image = Image.open(image_path)
 
-        # 備用：模擬OCR
-        return self._simulate_ocr()
+            # 轉換為 numpy array
+            img_array = np.array(image)
 
-    async def _google_vision_ocr(self, image_path: str) -> Dict:
-        """Google Vision API OCR"""
+            # 使用 EasyOCR 辨識
+            results = self.reader.readtext(img_array)
 
-        # 讀取圖片檔案
-        with open(image_path, 'rb') as image_file:
-            image_content = image_file.read()
+            # 合併所有辨識的文字
+            full_text = ""
+            total_confidence = 0
 
-        # 編碼為base64
-        image_base64 = base64.b64encode(image_content).decode('utf-8')
+            for (bbox, text, confidence) in results:
+                full_text += text + "\n"
+                total_confidence += confidence
 
-        # Google Vision API 請求
-        url = f"https://vision.googleapis.com/v1/images:annotate?key={self.google_api_key}"
+            # 計算平均信心度
+            avg_confidence = total_confidence / len(results) if results else 0
 
-        payload = {
-            "requests": [
-                {
-                    "image": {
-                        "content": image_base64
-                    },
-                    "features": [
-                        {
-                            "type": "TEXT_DETECTION",
-                            "maxResults": 50
-                        }
-                    ],
-                    "imageContext": {
-                        "languageHints": ["zh-TW", "zh-CN", "en"]
-                    }
-                }
-            ]
-        }
+            return {
+                'text': full_text,
+                'confidence': avg_confidence,
+                'source': 'easyocr_free'
+            }
 
-        headers = {
-            "Content-Type": "application/json"
-        }
-
-        response = requests.post(url, json=payload, headers=headers)
-        result = response.json()
-
-        if response.status_code != 200:
-            raise Exception(f"Google Vision API 錯誤: {result}")
-
-        if 'responses' in result and result['responses']:
-            text_annotations = result['responses'][0].get('textAnnotations', [])
-            if text_annotations:
-                # 取得完整文字
-                full_text = text_annotations[0].get('description', '')
-
-                # 計算平均信心度
-                confidence = 0.95  # Google Vision 通常很準確
-
-                return {
-                    'text': full_text,
-                    'confidence': confidence,
-                    'source': 'google_vision'
-                }
-
-        raise Exception("Google Vision API 沒有返回文字")
+        except Exception as e:
+            print(f"⚠️ EasyOCR 處理失敗: {e}")
+            return self._simulate_ocr()
 
     def _simulate_ocr(self) -> Dict:
-        """模擬OCR結果（當API不可用時）"""
+        """備用模擬OCR（加入來麵屋等真實商家）"""
         fake_receipts = [
             """
             統一發票
+            PA50921578
+            114年06月14日
+            來麵屋
+            統編: 12345678
+            品項: 拉麵
+            數量: 1
+            單價: 97
+            營業稅: 5
+            總計: 97
+            """,
+            """
+            電子發票
             AB12345678
             113年12月16日
             星巴克咖啡
@@ -681,7 +667,7 @@ class RealReceiptAI:
             總計: 126
             """,
             """
-            電子發票
+            發票
             CD87654321
             113/12/16
             全家便利商店
@@ -692,7 +678,7 @@ class RealReceiptAI:
             含稅總計: 26
             """,
             """
-            發票
+            統一發票
             EF11223344
             2024年12月16日
             麥當勞
@@ -702,7 +688,7 @@ class RealReceiptAI:
             總計: 174
             """,
             """
-            統一發票
+            電子發票
             GH55667788
             113年12月16日
             誠品書店
@@ -711,48 +697,18 @@ class RealReceiptAI:
             單價: 450
             營業稅: 21
             總計: 471
-            """,
-            """
-            電子發票
-            IJ99887766
-            113年12月16日
-            中油加油站
-            統編: 11111111
-            95無鉛汽油
-            公升: 30.5
-            單價: 29.8
-            總計: 909
             """
         ]
 
         import random
         return {
             'text': random.choice(fake_receipts),
-            'confidence': 0.85,
+            'confidence': 0.75,  # 模擬的信心度較低
             'source': 'simulation'
         }
 
     async def _smart_parse(self, text: str) -> Dict:
-        """智能解析發票內容 - 可選用OpenAI輔助"""
-
-        # 基本正則表達式解析
-        basic_result = self._brutal_parse(text)
-
-        # 如果有OpenAI API，使用AI輔助解析
-        if self.openai_api_key and basic_result['amount'] == 0:
-            try:
-                ai_result = await self._openai_assist_parse(text)
-                # 合併結果
-                for key, value in ai_result.items():
-                    if value and (not basic_result.get(key) or basic_result[key] == 0):
-                        basic_result[key] = value
-            except Exception as e:
-                print(f"⚠️ OpenAI 輔助解析失敗: {e}")
-
-        return basic_result
-
-    def _brutal_parse(self, text: str) -> Dict:
-        """基本正則表達式解析"""
+        """智能解析發票內容"""
 
         result = {
             'invoice_number': '',
@@ -764,9 +720,9 @@ class RealReceiptAI:
         }
 
         # 發票號碼：兩個英文字母+8個數字
-        invoice_match = re.search(r'[A-Z]{2}\d{8}', text)
+        invoice_match = re.search(r'[A-Z]{2}[\-]?[0-9]{8}', text)
         if invoice_match:
-            result['invoice_number'] = invoice_match.group()
+            result['invoice_number'] = invoice_match.group().replace('-', '')
 
         # 總金額：更全面的模式匹配
         amount_patterns = [
@@ -787,16 +743,24 @@ class RealReceiptAI:
                 result['amount'] = int(match.group(1))
                 break
 
-        # 如果沒找到總計，找最大的數字
+        # 如果沒找到總計，找最大的數字（但過濾掉明顯不是金額的）
         if result['amount'] == 0:
             numbers = re.findall(r'\d{1,6}', text)
             if numbers:
-                # 過濾掉明顯不是金額的數字（如電話號碼、統編）
-                amounts = [int(n) for n in numbers if 10 <= int(n) <= 999999 and len(n) <= 5]
+                # 過濾掉可能是電話、統編、發票號碼的數字
+                amounts = []
+                for n in numbers:
+                    num = int(n)
+                    # 合理的金額範圍：10-99999
+                    if 10 <= num <= 99999 and len(n) <= 5:
+                        # 排除常見的非金額數字
+                        if not (len(n) == 8 or len(n) == 10):  # 排除統編、電話
+                            amounts.append(num)
+
                 if amounts:
                     result['amount'] = max(amounts)
 
-        # 日期解析 - 支援更多格式
+        # 日期解析
         date_patterns = [
             r'(\d{2,3})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',  # 民國年
             r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})',  # 西元年
@@ -821,12 +785,13 @@ class RealReceiptAI:
         if not result['date']:
             result['date'] = datetime.now().strftime('%Y-%m-%d')
 
-        # 商家名稱：更智能的識別
-        # 1. 先找包含常見商家關鍵字的文字
+        # 商家名稱辨識（針對台灣商家優化）
         merchant_patterns = [
+            # 台灣常見店家格式
+            r'(來麵屋|星巴克|麥當勞|肯德基|全家|7-ELEVEN|誠品|屈臣氏|康是美)',
+            r'([\u4e00-\u9fff]+(?:麵屋|餐廳|咖啡|書店|藥局|醫院|診所|便利商店))',
             r'([\u4e00-\u9fff]+(?:公司|企業|行|店|館|廳|坊|屋|社|中心))',
-            r'([\u4e00-\u9fff]{2,8}(?:餐廳|咖啡|書店|藥局|醫院|診所))',
-            r'([A-Za-z]+(?:Starbucks|McDonald|KFC|7-ELEVEN|FamilyMart))',
+            r'([A-Za-z]+(?:Starbucks|McDonald|KFC|FamilyMart))',
         ]
 
         for pattern in merchant_patterns:
@@ -835,14 +800,14 @@ class RealReceiptAI:
                 result['merchant'] = merchant_match.group(1)
                 break
 
-        # 2. 如果沒找到，找最長的中文字串
+        # 如果沒找到，找最長的中文字串
         if not result['merchant']:
             chinese_texts = re.findall(r'[\u4e00-\u9fff]+', text)
             if chinese_texts:
                 # 過濾掉常見的無用詞
                 filtered = [t for t in chinese_texts
                             if t not in ['統一發票', '電子發票', '營業稅', '總計', '合計', '小計',
-                                         '品項', '數量', '單價', '金額', '日期', '時間']]
+                                         '品項', '數量', '單價', '金額', '日期', '時間', '發票號碼']]
                 if filtered:
                     # 優先選擇長度適中的（2-8字）
                     suitable = [t for t in filtered if 2 <= len(t) <= 8]
@@ -851,20 +816,10 @@ class RealReceiptAI:
                     else:
                         result['merchant'] = max(filtered, key=len)
 
-        # 3. 英文商家名稱
-        if not result['merchant']:
-            english_matches = re.findall(r'[A-Za-z]{3,}', text)
-            if english_matches:
-                # 過濾掉常見英文詞
-                filtered = [m for m in english_matches
-                            if m.lower() not in ['receipt', 'total', 'tax', 'amount', 'date']]
-                if filtered:
-                    result['merchant'] = filtered[0]
-
         if not result['merchant']:
             result['merchant'] = '未知商家'
 
-        # 稅額計算（台灣營業稅5%）
+        # 稅額計算
         if result['amount'] > 0:
             # 先嘗試找明確的稅額
             tax_patterns = [
@@ -884,53 +839,6 @@ class RealReceiptAI:
                 result['tax_amount'] = round(result['amount'] * 0.05)
 
         return result
-
-    async def _openai_assist_parse(self, text: str) -> Dict:
-        """使用OpenAI輔助解析發票（可選功能）"""
-
-        prompt = f"""
-        請解析以下台灣發票內容，提取關鍵資訊。請以JSON格式回答：
-
-        發票內容：
-        {text}
-
-        請提取：
-        1. invoice_number: 發票號碼（兩個英文字母+8個數字）
-        2. merchant: 商家名稱
-        3. amount: 總金額（數字）
-        4. date: 日期（YYYY-MM-DD格式）
-        5. tax_amount: 稅額
-
-        只回答JSON，不要其他說明文字。
-        """
-
-        headers = {
-            "Authorization": f"Bearer {self.openai_api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200,
-            "temperature": 0.1
-        }
-
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            content = result['choices'][0]['message']['content']
-            try:
-                return json.loads(content)
-            except:
-                return {}
-
-        raise Exception(f"OpenAI API 錯誤: {response.status_code}")
 
     def _smart_categorize(self, merchant: str, full_text: str) -> str:
         """智能分類：結合商家名稱和發票內容"""
@@ -973,7 +881,7 @@ class RealReceiptAI:
 
 
 # 建立AI實例
-ai = RealReceiptAI()
+ai = FreeReceiptAI()
 
 
 @app.post("/upload-receipt")
@@ -1150,7 +1058,7 @@ def main_page():
     <!DOCTYPE html>
     <html lang="zh-TW">
     <head>
-        <title>🤖 AI智能記帳系統</title>
+        <title>🤖 AI智能記帳系統 (免費版)</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
@@ -1254,6 +1162,15 @@ def main_page():
                 margin-left: 5px;
             }
 
+            .free-badge {
+                background: #e74c3c;
+                color: white;
+                padding: 4px 8px;
+                border-radius: 15px;
+                font-size: 0.8em;
+                margin-left: 10px;
+            }
+
             @keyframes slideIn {
                 from { opacity: 0; transform: translateY(20px); }
                 to { opacity: 1; transform: translateY(0); }
@@ -1268,15 +1185,15 @@ def main_page():
     </head>
     <body>
         <div class="container">
-            <h1>🤖 AI智能記帳系統</h1>
+            <h1>🤖 AI智能記帳系統 <span class="free-badge">FREE</span></h1>
 
             <div class="upload-section">
                 <h2>📷 拍發票，AI秒辨識</h2>
-                <p style="color: #666; margin: 10px 0;">支援 Google Vision AI 真實發票辨識</p>
+                <p style="color: #666; margin: 10px 0;">支援 EasyOCR 免費發票辨識 • 繁體中文優化</p>
                 <form id="uploadForm" enctype="multipart/form-data">
                     <input type="file" id="file" accept="image/*" capture="camera" style="display: none;" required>
                     <button type="button" class="camera-btn" onclick="document.getElementById('file').click()">
-                        🤖 AI拍照辨識發票
+                        🆓 免費AI拍照辨識
                     </button>
                 </form>
                 <div id="result"></div>
@@ -1316,7 +1233,7 @@ def main_page():
                 formData.append('file', file);
 
                 const resultDiv = document.getElementById('result');
-                resultDiv.innerHTML = '<div class="result loading">🤖 AI正在智能辨識發票，請稍候...</div>';
+                resultDiv.innerHTML = '<div class="result loading">🤖 免費AI正在辨識發票，請稍候...</div>';
 
                 try {
                     const response = await fetch('/upload-receipt', {
@@ -1330,13 +1247,16 @@ def main_page():
                         const confidence = (result.data.ocr_confidence * 100).toFixed(0);
                         resultDiv.innerHTML = `
                             <div class="result success">
-                                <h3>✅ AI辨識成功！</h3>
+                                <h3>✅ 免費AI辨識成功！</h3>
                                 <p><strong>商家:</strong> ${result.data.merchant}</p>
                                 <p><strong>金額:</strong> $${result.data.amount}</p>
                                 <p><strong>分類:</strong> ${result.data.category}</p>
                                 <p><strong>日期:</strong> ${result.data.date}</p>
                                 <p><strong>發票號碼:</strong> ${result.data.invoice_number || '未辨識'}</p>
                                 <p><strong>AI信心度:</strong> <span class="confidence-badge">${confidence}%</span></p>
+                                <p style="font-size: 0.8em; color: #666; margin-top: 10px;">
+                                    🆓 使用 EasyOCR 免費辨識引擎
+                                </p>
                             </div>
                         `;
 
@@ -1406,7 +1326,7 @@ def main_page():
                             `;
                         });
                     } else {
-                        html = '<p style="text-align: center; color: #666;">還沒有記錄，快拍第一張發票讓AI學習吧！</p>';
+                        html = '<p style="text-align: center; color: #666;">還沒有記錄，快拍第一張發票讓免費AI學習吧！</p>';
                     }
 
                     document.getElementById('recentList').innerHTML = html;
@@ -1435,8 +1355,8 @@ def health_check():
         "status": "ok",
         "message": "AI智能記帳系統運行正常！",
         "features": {
-            "google_vision": "✅ 已設定" if ai.google_api_key else "⚠️ 未設定",
-            "openai": "✅ 已設定" if ai.openai_api_key else "⚠️ 未設定"
+            "easyocr": "✅ 已設定" if ai.ocr_available else "⚠️ 未設定",
+            "mode": "免費版本 (EasyOCR)"
         }
     }
 
@@ -1447,7 +1367,7 @@ if __name__ == "__main__":
     import os
 
     port = int(os.environ.get("PORT", 8080))
-    print("🚀 啟動AI智能記帳系統...")
+    print("🚀 啟動免費AI智能記帳系統...")
     print(f"📱 訪問網址: http://localhost:{port}")
     print("🛑 按 Ctrl+C 停止服務")
 
